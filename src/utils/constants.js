@@ -1,15 +1,19 @@
 export const PERSONAL_INFO = {
-  name: "Your Name",
-  title: "DevOps Engineer",
-  experience: "3+ Years",
-  tagline: "Building Scalable Infrastructure | Automating Deployments | Cloud Architecture",
-  location: "Bangalore",
-  targetPackage: "15 LPA",
-  email: "your.email@example.com",
-  phone: "+91 98765 43210",
-  github: "https://github.com/yourusername",
-  linkedin: "https://linkedin.com/in/yourusername"
+  name: "Chandru K",
+  title: " Chandru K DevOps Engineer",
+  displayLine: "Chandru K • DevOps Engineer • 3+ Years",
+
+  tagline:
+    "Results-driven DevOps Engineer with 3+ years of experience driving automation, reliability, and scalability across multi-cloud environments. Expert in designing and implementing end-to-end CI/CD pipelines, containerized deployments, and Infrastructure as Code (IaC) using Azure, AWS, Docker, Kubernetes, Terraform, and Jenkins. Passionate about optimizing cloud performance, enabling secure and high-availability infrastructure, and accelerating release cycles through intelligent automation.",
+
+//   email: "your.email@example.com",
+//   phone: "+91 98765 43210",
+//   github: "https://github.com/yourusername",
+//   linkedin: "https://linkedin.com/in/yourusername"
 };
+
+
+
 
 export const TECH_BADGES = [
   { name: 'AWS', color: 'blue' },
