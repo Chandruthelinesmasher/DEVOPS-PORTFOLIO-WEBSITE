@@ -2,7 +2,20 @@
 
 A modern, responsive **DevOps Engineer Portfolio Website** built using **React + Vite** to showcase professional experience, certifications, projects, and technical expertise in DevOps, Cloud, and Automation.
 
- <img width="1898" height="877" alt="image" src="https://github.com/user-attachments/assets/74296560-2e88-4eeb-abf9-dcb66b3a5bf0" />
+ <img width="1900" height="1026" alt="image" src="https://github.com/user-attachments/assets/4e6dce2c-85d0-46eb-9c86-f58571b15466" />
+
+ <img width="1888" height="859" alt="image" src="https://github.com/user-attachments/assets/c44ac5a3-beac-4a9d-9d39-9ea3bf154efb" />
+
+ <img width="1879" height="995" alt="image" src="https://github.com/user-attachments/assets/7ee10579-7e38-4d4f-973c-2aded4548f18" />
+
+ <img width="1882" height="1027" alt="image" src="https://github.com/user-attachments/assets/4e72269a-b2d2-4d21-b157-0ad828baf7b1" />
+
+ <img width="1880" height="1015" alt="image" src="https://github.com/user-attachments/assets/17938af5-4e78-466e-a585-b01b15960c0b" />
+
+
+
+
+
 <!-- optional: add a screenshot if available -->
 
 ---
