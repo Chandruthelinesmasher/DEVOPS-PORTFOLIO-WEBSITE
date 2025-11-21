@@ -14,8 +14,8 @@ WORKDIR /app
 # Copy package files first (for better caching)
 COPY --chown=nextjs:nodejs package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production && \
+# ✅ FIX: Install ALL dependencies (dev + prod) so Vite is available
+RUN npm ci && \
     npm cache clean --force
 
 # Copy source code
@@ -42,21 +42,21 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # Copy built frontend files from builder stage
 COPY --from=builder --chown=nextjs:nodejs /app/dist /usr/share/nginx/html
 
-# Change ownership to non-root user
+# Change ownership to non-root user (optional if chown already done in COPY)
 RUN chown -R nextjs:nodejs /usr/share/nginx/html
 
 # Switch to non-root user
 USER nextjs
 
-# Expose port
+# Expose port 8080 (assuming your nginx.conf listens on 8080)
 EXPOSE 8080
 
-# Labels (good for container registries)
+# Labels
 LABEL maintainer="kumaravelchadnru982@gmail.com"
 LABEL description="Portfolio Website - Chandru K - DevOps Engineer"
 LABEL org.opencontainers.image.source="https://github.com/Chandruthelinesmasher/portfolio-website"
 
-# Healthcheck
+# Healthcheck — ensure nginx serves /health on localhost:8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
