@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: '18.x'
+  NODE_VERSION: '22.x'  # Updated to match your Dockerfile
   IMAGE_NAME: portfolio-website
 
 jobs:
@@ -38,16 +38,7 @@ jobs:
           CI: true
         continue-on-error: true
 
-      - name: 📊 Upload Coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage/lcov.info
-          flags: unittests
-          name: portfolio-coverage
-        continue-on-error: true
-
-      - name: 🏗️ Build React Application
+      - name: 🏗️ Build Vite Application
         run: npm run build
         env:
           NODE_ENV: production
@@ -56,7 +47,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
-          path: build/
+          path: dist/  # ✅ Updated from 'build/' to 'dist/' for Vite
           retention-days: 7
 
   # =============================================
@@ -75,7 +66,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: build/
+          path: dist/  # ✅ Updated from 'build/' to 'dist/' for Vite
 
       - name: 🔐 Login to Docker Hub
         uses: docker/login-action@v3
@@ -103,6 +94,9 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          # Build args are not needed since Dockerfile handles it
+          # build-args:
+          #   NODE_VERSION: ${{ env.NODE_VERSION }}
 
   # =============================================
   # Job 3: Notification & Summary Report
