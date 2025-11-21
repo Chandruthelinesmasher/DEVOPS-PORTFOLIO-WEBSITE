@@ -13,10 +13,12 @@ export const Navbar = ({ activeSection, onNavigate }) => {
           : 'bg-transparent'
       }`}
     >
-      <div className="max-w-6xl mx-auto px-6 py-4">
-        <div className="flex justify-between items-center">
-          {/* Name and Role */}
-          <div className="flex flex-col leading-tight">
+      {/* Full width container instead of max-w-6xl */}
+      <div className="w-full px-6 py-4">
+        <div className="flex items-center justify-between w-full">
+
+          {/* Left Corner */}
+          <div className="flex flex-col leading-tight text-left">
             <span className="text-2xl font-extrabold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
               Chandru K
             </span>
@@ -25,7 +27,7 @@ export const Navbar = ({ activeSection, onNavigate }) => {
             </span>
           </div>
 
-          {/* Navigation Menu */}
+          {/* Right Corner */}
           <div className="hidden md:flex gap-8">
             {NAV_ITEMS.map((section) => (
               <button
@@ -41,6 +43,7 @@ export const Navbar = ({ activeSection, onNavigate }) => {
               </button>
             ))}
           </div>
+
         </div>
       </div>
     </nav>
