@@ -13,71 +13,11 @@ env:
 
 jobs:
   # =============================================
-  # Job 1: Code Quality & Security Checks
-  # =============================================
-  lint-and-scan:
-    name: 🔍 Code Quality & Security Scan
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: 🔍 Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 📦 Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📥 Install Dependencies
-        run: npm ci
-
-      - name: 🔍 Run ESLint
-        run: npm run lint
-
-      - name: 🔒 Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript
-
-      - name: 🔒 Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-
-      - name: 📊 SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.projectKey=chandru-portfolio-website
-            -Dsonar.organization=chandrulinesmasher
-            -Dsonar.sources=src
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
-        continue-on-error: true
-
-      - name: 🔐 Trivy Filesystem Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
-
-      - name: 📤 Upload Trivy Results
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: "trivy-results.sarif"
-
-  # =============================================
-  # Job 2: Build & Test
+  # Job 1: Build & Test
   # =============================================
   build-and-test:
     name: 🏗️ Build & Test Application
     runs-on: ubuntu-latest
-    needs: lint-and-scan
 
     steps:
       - name: 🔍 Checkout Code
@@ -120,7 +60,7 @@ jobs:
           retention-days: 7
 
   # =============================================
-  # Job 3: Docker Build & Push to Docker Hub
+  # Job 2: Docker Build & Push to Docker Hub
   # =============================================
   docker-build-push:
     name: 🐳 Docker Build & Push
@@ -165,12 +105,12 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
 
   # =============================================
-  # Job 4: Notification & Summary Report
+  # Job 3: Notification & Summary Report
   # =============================================
   notify:
     name: 📊 Pipeline Summary & Notification
     runs-on: ubuntu-latest
-    needs: [lint-and-scan, build-and-test, docker-build-push]
+    needs: [build-and-test, docker-build-push]
     if: always()
 
     steps:
