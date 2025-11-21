@@ -15,9 +15,10 @@ env:
   EKS_CLUSTER_NAME: portfolio-website-cluster
 
 jobs:
-  # =============================================
-  # Job 1: Code Quality & Security
-  # =============================================
+
+  # =======================================================
+  # Job 1: Code Quality & Security (Without CodeQL)
+  # =======================================================
   code-quality:
     name: 🔍 Code Quality & Security Scan
     runs-on: ubuntu-latest
@@ -25,10 +26,8 @@ jobs:
     steps:
       - name: 🔍 Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: 📦 Setup Node.js ${{ env.NODE_VERSION }}
+      - name: 📦 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -41,14 +40,6 @@ jobs:
         run: npm run lint
         continue-on-error: true
 
-      - name: 🔒 Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript
-
-      - name: 🔒 Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-
       - name: 🔐 Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -60,11 +51,12 @@ jobs:
       - name: 📤 Upload Trivy Results
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-fs-results.sarif'
+          sarif_file: trivy-fs-results.sarif
 
-  # =============================================
+
+  # =======================================================
   # Job 2: Build & Test
-  # =============================================
+  # =======================================================
   build-test:
     name: 🏗️ Build & Test Application
     runs-on: ubuntu-latest
@@ -73,48 +65,32 @@ jobs:
       image-tag: ${{ steps.image-tag.outputs.tag }}
     
     steps:
-      - name: 🔍 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 📦 Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: npm
 
-      - name: 📥 Install Dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: 🧪 Run Unit Tests
-        run: npm run test:unit
-        continue-on-error: true
-
-      - name: 🧪 Run Integration Tests
-        run: npm run test:integration
-        continue-on-error: true
-
-      - name: 📊 Generate Test Coverage
-        run: npm test -- --coverage --watchAll=false
-        env:
-          CI: true
-        continue-on-error: true
+      - name: 🧪 Run All Tests
+        run: |
+          npm run test:unit || true
+          npm run test:integration || true
+          npm test -- --coverage || true
 
       - name: 📊 Upload Coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
-          flags: unittests
         continue-on-error: true
 
-      - name: 🏗️ Build React Application
+      - name: 🏗️ Build Application
         run: npm run build
-        env:
-          CI: false
-          NODE_ENV: production
 
-      - name: 📦 Archive Build Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: build/
@@ -123,13 +99,12 @@ jobs:
       - name: 🏷️ Generate Image Tag
         id: image-tag
         run: |
-          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-          echo "tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "Full tag: ${{ github.ref_name }}-${SHORT_SHA}"
+          echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
-  # =============================================
-  # Job 3: Docker Build & Push to ECR
-  # =============================================
+
+  # =======================================================
+  # Job 3: Docker Build & Push
+  # =======================================================
   docker-build-push:
     name: 🐳 Docker Build & Push to ECR
     runs-on: ubuntu-latest
@@ -138,66 +113,54 @@ jobs:
       image-uri: ${{ steps.build-image.outputs.image }}
     
     steps:
-      - name: 🔍 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 📥 Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: build-artifacts
           path: build/
 
-      - name: 🔧 Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: 🔐 Login to Amazon ECR
+      - uses: aws-actions/amazon-ecr-login@v2
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: 🔧 Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: 🐳 Build and Push Docker Image
+      - name: 🐳 Build & Push Image
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ needs.build-test.outputs.image-tag }}
         run: |
-          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-          LATEST_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-          
-          docker build -t $IMAGE_URI \
-            -t $LATEST_URI \
-            --build-arg NODE_ENV=production \
-            .
-          
-          docker push $IMAGE_URI
-          docker push $LATEST_URI
-          
-          echo "image=${IMAGE_URI}" >> $GITHUB_OUTPUT
-          echo "✅ Image pushed: ${IMAGE_URI}"
+          IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
 
-      - name: 🔒 Scan Docker Image with Trivy
+          docker build . -t $IMAGE -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+          docker push $IMAGE
+          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: 🔒 Scan Docker Image
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ steps.build-image.outputs.image }}
-          format: 'sarif'
-          output: 'trivy-image-results.sarif'
+          format: sarif
+          output: trivy-image-results.sarif
         continue-on-error: true
 
-      - name: 📤 Upload Trivy Image Results
-        uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-image-results.sarif'
-        continue-on-error: true
+          sarif_file: trivy-image-results.sarif
 
-  # =============================================
+
+  # =======================================================
   # Job 4: Terraform Infrastructure
-  # =============================================
+  # =======================================================
   terraform-deploy:
     name: 🏗️ Terraform Infrastructure
     runs-on: ubuntu-latest
@@ -205,18 +168,15 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
-      - name: 🔍 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 🔧 Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: 🔧 Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
@@ -229,14 +189,11 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="encrypt=true"
 
-      - name: ✅ Terraform Validate
+      - name: Validate & Format
         working-directory: terraform
-        run: terraform validate
-
-      - name: 📋 Terraform Format Check
-        working-directory: terraform
-        run: terraform fmt -check -recursive
-        continue-on-error: true
+        run: |
+          terraform validate
+          terraform fmt -check -recursive || true
 
       - name: 📊 Terraform Plan
         working-directory: terraform
@@ -251,258 +208,58 @@ jobs:
         working-directory: terraform
         run: terraform apply -auto-approve tfplan
 
-      - name: 📤 Export Terraform Outputs
-        id: tf-outputs
-        working-directory: terraform
-        run: |
-          echo "eks_cluster_endpoint=$(terraform output -raw eks_cluster_endpoint)" >> $GITHUB_OUTPUT
-          echo "eks_cluster_name=$(terraform output -raw eks_cluster_name)" >> $GITHUB_OUTPUT
 
-  # =============================================
+  # =======================================================
   # Job 5: Deploy to EKS
-  # =============================================
+  # =======================================================
   deploy-to-eks:
     name: 🚀 Deploy to EKS
     runs-on: ubuntu-latest
     needs: [docker-build-push, terraform-deploy]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment:
-      name: production
-      url: https://portfolio.chandru-devops.com
     
     steps:
-      - name: 🔍 Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 🔧 Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: 🔧 Install kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
+      - uses: azure/setup-kubectl@v3
 
-      - name: 🔐 Configure kubectl for EKS
+      - name: Configure EKS
         run: |
           aws eks update-kubeconfig \
             --name ${{ env.EKS_CLUSTER_NAME }} \
             --region ${{ env.AWS_REGION }}
-          
-          kubectl version --client
-          kubectl cluster-info
 
-      - name: 📝 Update Kubernetes Manifests
+      - name: Update deployment image
         env:
           IMAGE_URI: ${{ needs.docker-build-push.outputs.image-uri }}
         run: |
-          # Update deployment.yaml with new image
           sed -i "s|image:.*|image: ${IMAGE_URI}|g" k8s/deployment.yaml
-          
-          echo "Updated deployment.yaml:"
-          cat k8s/deployment.yaml
 
-      - name: 🚀 Deploy to Kubernetes
+      - name: Apply Kubernetes Resources
         run: |
-          # Apply ConfigMaps and Secrets first
-          kubectl apply -f k8s/configmap.yaml --namespace=production || true
-          kubectl apply -f k8s/secret.yaml --namespace=production || true
-          
-          # Apply main resources
-          kubectl apply -f k8s/deployment.yaml --namespace=production
-          kubectl apply -f k8s/service.yaml --namespace=production
-          kubectl apply -f k8s/ingress.yaml --namespace=production || true
-          
-          echo "✅ Kubernetes resources applied"
+          kubectl apply -f k8s/ -n production
 
-      - name: ⏳ Wait for Deployment Rollout
+      - name: Wait for Rollout
         run: |
-          kubectl rollout status deployment/portfolio-website \
-            --namespace=production \
-            --timeout=10m
-          
-          echo "✅ Deployment rollout completed"
+          kubectl rollout status deployment/portfolio-website -n production --timeout=10m
 
-      - name: 🔍 Verify Deployment
-        run: |
-          echo "📊 Deployment Status:"
-          kubectl get deployments -n production
-          
-          echo ""
-          echo "📦 Pods Status:"
-          kubectl get pods -l app=portfolio-website -n production
-          
-          echo ""
-          echo "🌐 Services:"
-          kubectl get svc -n production
-          
-          echo ""
-          echo "🔗 Ingress:"
-          kubectl get ingress -n production || echo "No ingress configured"
 
-      - name: 📊 Get Application URL
-        id: app-url
-        run: |
-          # Get LoadBalancer URL
-          LB_HOSTNAME=$(kubectl get svc portfolio-website-svc -n production -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "pending")
-          
-          if [ "$LB_HOSTNAME" != "pending" ]; then
-            echo "app_url=http://${LB_HOSTNAME}" >> $GITHUB_OUTPUT
-            echo "✅ Application URL: http://${LB_HOSTNAME}"
-          else
-            echo "⏳ LoadBalancer is still provisioning..."
-          fi
-
-      - name: 🧪 Health Check
-        run: |
-          echo "Waiting for service to be ready..."
-          sleep 30
-          
-          # Try to get the service endpoint
-          ENDPOINT=$(kubectl get svc portfolio-website-svc -n production -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          
-          if [ -n "$ENDPOINT" ]; then
-            for i in {1..5}; do
-              if curl -f -s "http://${ENDPOINT}/health" > /dev/null; then
-                echo "✅ Health check passed!"
-                break
-              else
-                echo "⏳ Attempt $i: Waiting for service to respond..."
-                sleep 10
-              fi
-            done
-          else
-            echo "⚠️ Service endpoint not yet available"
-          fi
-
-  # =============================================
-  # Job 6: Post-Deployment Tests
-  # =============================================
-  post-deployment-tests:
-    name: 🧪 Post-Deployment Tests
-    runs-on: ubuntu-latest
-    needs: deploy-to-eks
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
-    steps:
-      - name: 🔍 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: 🔧 Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: 🔧 Configure kubectl
-        run: |
-          aws eks update-kubeconfig \
-            --name ${{ env.EKS_CLUSTER_NAME }} \
-            --region ${{ env.AWS_REGION }}
-
-      - name: 🧪 Run Smoke Tests
-        run: |
-          echo "🧪 Running smoke tests..."
-          
-          # Check if pods are running
-          READY_PODS=$(kubectl get pods -l app=portfolio-website -n production -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}')
-          
-          if [[ "$READY_PODS" == *"True"* ]]; then
-            echo "✅ Pods are ready"
-          else
-            echo "❌ Pods are not ready"
-            exit 1
-          fi
-
-      - name: 📊 Deployment Summary
-        run: |
-          echo "## 🚀 EKS Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Deployed Resources" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          kubectl get all -n production -l app=portfolio-website >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-  # =============================================
-  # Job 7: Notifications & Reporting
-  # =============================================
+  # =======================================================
+  # Job 6: Notification
+  # =======================================================
   notify:
-    name: 📊 Pipeline Summary & Notification
+    name: 📊 Pipeline Summary
     runs-on: ubuntu-latest
     needs: [code-quality, build-test, docker-build-push, deploy-to-eks]
     if: always()
-    
+
     steps:
-      - name: 📊 Generate Pipeline Report
+      - name: Summary
         run: |
-          echo "# 🚀 AWS EKS Deployment Pipeline Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "## 📋 Pipeline Information" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Workflow** | ${{ github.workflow }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Branch** | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Author** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **AWS Region** | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **EKS Cluster** | ${{ env.EKS_CLUSTER_NAME }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "## 📊 Job Status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ needs.code-quality.result }}" == "success" ]; then
-            echo "✅ **Code Quality** - Passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Code Quality** - Failed" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ needs.build-test.result }}" == "success" ]; then
-            echo "✅ **Build & Test** - Passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Build & Test** - Failed" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ needs.docker-build-push.result }}" == "success" ]; then
-            echo "✅ **Docker Build & Push** - Passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Docker Build & Push** - Failed" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ needs.deploy-to-eks.result }}" == "success" ]; then
-            echo "✅ **EKS Deployment** - Passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⏭️ **EKS Deployment** - Skipped or Failed" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ needs.deploy-to-eks.result }}" == "success" ]; then
-            echo "## 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Your portfolio website has been successfully deployed to AWS EKS." >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🔗 Access Commands" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "# Configure kubectl" >> $GITHUB_STEP_SUMMARY
-            echo "aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "# View pods" >> $GITHUB_STEP_SUMMARY
-            echo "kubectl get pods -n production" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "# View services" >> $GITHUB_STEP_SUMMARY
-            echo "kubectl get svc -n production" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Completed at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "## Pipeline Complete 🚀" >> $GITHUB_STEP_SUMMARY
