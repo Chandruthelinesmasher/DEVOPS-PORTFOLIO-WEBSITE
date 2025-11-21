@@ -3,7 +3,7 @@
 # =============================================
 FROM node:22-alpine AS builder
 
-# Install build dependencies and set up non-root user
+# Install system dependencies required for native npm packages (if any)
 RUN apk update && \
     apk add --no-cache python3 make g++ && \
     addgroup -g 1001 -S nodejs && \
@@ -11,10 +11,10 @@ RUN apk update && \
 
 WORKDIR /app
 
-# Copy package files first (for better caching)
+# Copy package files with proper ownership (improves layer caching)
 COPY --chown=nextjs:nodejs package*.json ./
 
-# ✅ FIX: Install ALL dependencies (dev + prod) so Vite is available
+# ✅ FIX: Install ALL dependencies (including devDependencies like Vite)
 RUN npm ci && \
     npm cache clean --force
 
@@ -22,6 +22,7 @@ RUN npm ci && \
 COPY --chown=nextjs:nodejs . .
 
 # Build the Vite application
+USER nextjs
 RUN npm run build
 
 # =============================================
@@ -29,37 +30,36 @@ RUN npm run build
 # =============================================
 FROM nginx:alpine AS production
 
-# Create non-root user and install essential tools
+# Install minimal runtime dependencies and set up non-root user
 RUN apk update && \
     apk add --no-cache curl ca-certificates && \
     addgroup -g 1001 -S nodejs && \
     adduser -S nextjs -u 1001 && \
     rm -f /etc/nginx/conf.d/default.conf
 
-# Copy custom Nginx configuration
+# Copy custom Nginx config
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# Copy built frontend files from builder stage
+# Copy built static assets from builder stage
 COPY --from=builder --chown=nextjs:nodejs /app/dist /usr/share/nginx/html
 
-# Change ownership to non-root user (optional if chown already done in COPY)
+# Ensure ownership is correct
 RUN chown -R nextjs:nodejs /usr/share/nginx/html
 
 # Switch to non-root user
 USER nextjs
 
-# Expose port 8080 (assuming your nginx.conf listens on 8080)
+# Expose port 8080 (must match nginx.conf)
 EXPOSE 8080
 
-# Labels
+# Metadata labels
 LABEL maintainer="kumaravelchadnru982@gmail.com"
 LABEL description="Portfolio Website - Chandru K - DevOps Engineer"
-LABEL org.opencontainers.image.source="https://github.com/Chandruthelinesmasher/portfolio-website"
+LABEL org.opencontainers.image.source="https://github.com/Chandruthelinesmasher/DEVOPS-PORTFOLIO-WEBSITE"
 
-# Healthcheck — ensure nginx serves /health on localhost:8080
+# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Start Nginx
+# Start Nginx in foreground
 CMD ["nginx", "-g", "daemon off;"]
-
