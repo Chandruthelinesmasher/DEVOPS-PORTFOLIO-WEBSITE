@@ -1,0 +1,180 @@
+name: Portfolio CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18.x'
+  IMAGE_NAME: portfolio-website
+
+jobs:
+  # =============================================
+  # Job 1: Code Quality & Security Checks
+  # =============================================
+  lint-and-scan:
+    name: 🔍 Code Quality & Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🔍 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install Dependencies
+        run: npm ci
+
+      - name: 🔍 Run ESLint
+        run: npm run lint
+
+      - name: 🔒 Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: 🔒 Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: 📊 SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=chandru-portfolio-website
+            -Dsonar.organization=chandrulinesmasher
+            -Dsonar.sources=src
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+        continue-on-error: true
+
+      - name: 🔐 Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: 📤 Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  # =============================================
+  # Job 2: Build & Test
+  # =============================================
+  build-and-test:
+    name: 🏗️ Build & Test Application
+    runs-on: ubuntu-latest
+    needs: lint-and-scan
+
+    steps:
+      - name: 🔍 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install Dependencies
+        run: npm ci
+
+      - name: 🧪 Run Tests with Coverage
+        run: npm test -- --coverage --watchAll=false
+        env:
+          CI: true
+        continue-on-error: true
+
+      - name: 📊 Upload Coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          flags: unittests
+          name: portfolio-coverage
+        continue-on-error: true
+
+      - name: 🏗️ Build React Application
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: 📦 Archive Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+          retention-days: 7
+
+  # =============================================
+  # Job 3: Docker Build & Push to Docker Hub
+  # =============================================
+  docker-build-push:
+    name: 🐳 Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: 🔍 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 📥 Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: 🔐 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: 🏷️ Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/portfolio-website
+          tags: |
+            type=raw,value=latest
+            type=sha
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+
+      - name: 🔧 Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🐳 Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+  # =============================================
+  # Job 4: Notification & Summary Report
+  # =============================================
+  notify:
+    name: 📊 Pipeline Summary & Notification
+    runs-on: ubuntu-latest
+    needs: [lint-and-scan, build-and-test, docker-build-push]
+    if: always()
+
+    steps:
+      - name: 📊 Generate Final Pipeline Summary
+        run: |
+          echo "# 🚀 CI/CD Pipeline Execution Report" >> $GITHUB_STEP_SUMMARY
+          echo "Pipeline completed for branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
