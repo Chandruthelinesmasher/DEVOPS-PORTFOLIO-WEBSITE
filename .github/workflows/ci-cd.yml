@@ -145,7 +145,6 @@ jobs:
             --role "Storage Blob Data Owner" \
             --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
 
-          echo "Waiting 90s for RBAC propagation..."
           sleep 90
 
       - uses: hashicorp/setup-terraform@v3
@@ -207,8 +206,18 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Debug ACR Name
-        run: echo "ACR NAME = ${{ needs.terraform-deploy.outputs.acr_name }}"
+      - name: FAIL IF ACR NAME IS EMPTY
+        run: |
+          if [ -z "${{ needs.terraform-deploy.outputs.acr_name }}" ]; then
+            echo "❌ ERROR: ACR NAME IS EMPTY — check TF_VAR_PROJECT_NAME"
+            exit 1
+          fi
+
+      - name: Debug Output Values
+        run: |
+          echo "ACR NAME        = ${{ needs.terraform-deploy.outputs.acr_name }}"
+          echo "ACR LOGIN       = ${{ needs.terraform-deploy.outputs.acr_login_server }}"
+          echo "IMAGE TAG       = ${{ needs.build-test.outputs.image-tag }}"
 
       - name: Login to ACR
         run: |
@@ -281,7 +290,6 @@ jobs:
     steps:
       - run: |
           echo "# 🚀 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build & Test | ${{ needs.build-test.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Terraform | ${{ needs.terraform-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
