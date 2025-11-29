@@ -8,10 +8,9 @@ resource "azurerm_kubernetes_cluster" "aks" {
   default_node_pool {
     name                = "default"
     node_count          = 1
-    vm_size             = "Standard_DC2s_v3"   # ✅ allowed
+    vm_size             = "Standard_DC2s_v3"
     type                = "VirtualMachineScaleSets"
     vnet_subnet_id      = azurerm_subnet.private[0].id
-    orchestrator_version = "1.29.0"
   }
 
   identity {
@@ -19,7 +18,11 @@ resource "azurerm_kubernetes_cluster" "aks" {
   }
 
   network_profile {
-    network_plugin = "azure"
-    network_policy = "azure"
+    network_plugin     = "azure"
+    network_policy     = "azure"
+    service_cidr       = "10.100.0.0/16"
+    dns_service_ip     = "10.100.0.10"
+    # Remove docker_bridge_cidr - deprecated and not needed
+    # Remove pod_cidr - not compatible with network_plugin = "azure"
   }
 }
