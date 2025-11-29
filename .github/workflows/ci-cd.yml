@@ -209,15 +209,15 @@ jobs:
       - name: FAIL IF ACR NAME IS EMPTY
         run: |
           if [ -z "${{ needs.terraform-deploy.outputs.acr_name }}" ]; then
-            echo "❌ ERROR: ACR NAME IS EMPTY — check TF_VAR_PROJECT_NAME"
+            echo "❌ ERROR: ACR NAME IS EMPTY — set TF_VAR_PROJECT_NAME"
             exit 1
           fi
 
       - name: Debug Output Values
         run: |
-          echo "ACR NAME        = ${{ needs.terraform-deploy.outputs.acr_name }}"
-          echo "ACR LOGIN       = ${{ needs.terraform-deploy.outputs.acr_login_server }}"
-          echo "IMAGE TAG       = ${{ needs.build-test.outputs.image-tag }}"
+          echo "ACR NAME  = ${{ needs.terraform-deploy.outputs.acr_name }}"
+          echo "ACR LOGIN = ${{ needs.terraform-deploy.outputs.acr_login_server }}"
+          echo "TAG       = ${{ needs.build-test.outputs.image-tag }}"
 
       - name: Login to ACR
         run: |
