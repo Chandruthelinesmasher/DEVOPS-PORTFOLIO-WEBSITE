@@ -52,6 +52,7 @@ jobs:
           sarif_file: trivy-fs-results.sarif
 
 
+
   # =======================================================
   # Job 2: Build & Test
   # =======================================================
@@ -93,6 +94,7 @@ jobs:
       - name: 🏷️ Create Image Tag
         id: tag
         run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
 
 
   # =======================================================
@@ -138,11 +140,17 @@ jobs:
             --name tfstate \
             --account-name $BACKEND_NAME
 
+          # ⭐ Assign role required for Terraform backend
+          az role assignment create \
+            --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
+            --role "Storage Blob Data Owner" \
+            --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
-      # 🔥 Terraform Init using CLI backend configs
+      # 🔥 Terraform Init using backend-config
       - name: 🔄 Terraform Init
         working-directory: terraform
         run: |
@@ -169,6 +177,7 @@ jobs:
       - name: 🚀 Terraform Apply
         working-directory: terraform
         run: terraform apply -auto-approve tfplan
+
 
 
   # =======================================================
@@ -217,6 +226,7 @@ jobs:
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
 
+
   # =======================================================
   # Job 5: Deploy to AKS
   # =======================================================
@@ -247,6 +257,7 @@ jobs:
 
       - run: kubectl apply -f k8s/ -n production
       - run: kubectl rollout status deployment/portfolio-website -n production --timeout=10m
+
 
 
   # =======================================================
