@@ -15,8 +15,6 @@ permissions:
 env:
   NODE_VERSION: '22.x'
   TERRAFORM_VERSION: '1.9.0'
-  AKS_CLUSTER_NAME: ${{ secrets.AZURE_AKS_CLUSTER_NAME }}
-  AKS_RG: ${{ secrets.AZURE_AKS_RG }}
 
 jobs:
 
@@ -36,21 +34,22 @@ jobs:
           cache: npm
 
       - run: npm ci
+      
+      - name: Run Linting
+        run: npm run lint || true
 
-      - run: npm run lint
-        continue-on-error: true
-
-      - uses: aquasecurity/trivy-action@master
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
           format: sarif
           output: trivy-fs-results.sarif
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - name: Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-fs-results.sarif
-
 
 
   # =======================================================
@@ -62,7 +61,7 @@ jobs:
     needs: code-quality
     outputs:
       image-tag: ${{ steps.tag.outputs.tag }}
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -71,87 +70,108 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - run: npm ci
+      - name: Install Dependencies
+        run: npm ci
 
-      - run: |
+      - name: Run Tests
+        run: |
           npm run test:unit || true
           npm run test:integration || true
           npm test -- --coverage || true
 
-      - uses: codecov/codecov-action@v4
+      - name: Upload Coverage to Codecov
+        uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
         continue-on-error: true
 
-      - run: npm run build
+      - name: Build Application
+        run: npm run build
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: dist/
+          retention-days: 7
 
       - name: 🏷️ Create Image Tag
         id: tag
         run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
 
-
   # =======================================================
-  # Job 3: Terraform Deploy
+  # Job 3: Terraform Apply Infra
   # =======================================================
   terraform-deploy:
-    name: 🏗️ Terraform Azure Infra
+    name: 🏗️ Terraform Azure Infrastructure
     runs-on: ubuntu-latest
     needs: build-test
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      acr_name: ${{ steps.tf_outputs.outputs.acr_name }}
+      acr_login_server: ${{ steps.tf_outputs.outputs.acr_login_server }}
+      aks_name: ${{ steps.tf_outputs.outputs.aks_name }}
+      aks_rg: ${{ steps.tf_outputs.outputs.aks_rg }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Pass Terraform backend auth vars
-      - name: Set Terraform SP Auth
+      - name: Setup Terraform Authentication
         run: |
           echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
           echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
 
-      # Create backend
-      - name: 🏗️ Create Terraform Backend (Storage Account + Container)
+      - name: 🏗️ Create Terraform Backend Storage
         run: |
-          BACKEND_NAME=tfbackend${{ github.run_id }}
+          BACKEND_NAME="tfstate$(date +%s)"
           echo "BACKEND_NAME=$BACKEND_NAME" >> $GITHUB_ENV
 
-          az group create -n tf-backend-rg -l eastus || true
+          # Create resource group
+          az group create \
+            --name tf-backend-rg \
+            --location eastus \
+            --tags Environment=Production Project=Portfolio || true
 
+          # Create storage account
           az storage account create \
-            -n $BACKEND_NAME \
-            -g tf-backend-rg \
-            -l eastus \
+            --name $BACKEND_NAME \
+            --resource-group tf-backend-rg \
+            --location eastus \
             --sku Standard_LRS \
-            --encryption-services blob
+            --encryption-services blob \
+            --allow-blob-public-access false
 
+          # Wait for storage account to be ready
+          sleep 10
+
+          # Create container
           az storage container create \
             --name tfstate \
+            --auth-mode login \
             --account-name $BACKEND_NAME
 
-          # ⭐ Assign role required for Terraform backend
+          # Assign permissions
           az role assignment create \
             --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
             --role "Storage Blob Data Owner" \
             --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
 
-      # 🔥 Terraform Init using backend-config
-      - name: 🔄 Terraform Init
+      - name: Terraform Init
         working-directory: terraform
         run: |
           terraform init \
@@ -161,23 +181,29 @@ jobs:
             -backend-config="key=infra.tfstate" \
             -backend-config="use_azuread_auth=true"
 
-      - name: Validate & Format
+      - name: Terraform Validate
         working-directory: terraform
-        run: |
-          terraform validate
-          terraform fmt -check -recursive || true
+        run: terraform validate
 
-      - name: 📊 Terraform Plan
+      - name: Terraform Plan
         working-directory: terraform
         run: |
           terraform plan -out=tfplan \
             -var="project_name=${{ secrets.TF_VAR_PROJECT_NAME }}" \
             -var="environment=${{ secrets.TF_VAR_ENVIRONMENT }}"
 
-      - name: 🚀 Terraform Apply
+      - name: Terraform Apply
         working-directory: terraform
         run: terraform apply -auto-approve tfplan
 
+      - name: Extract Terraform Outputs
+        id: tf_outputs
+        working-directory: terraform
+        run: |
+          echo "acr_name=$(terraform output -raw acr_name)" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+          echo "aks_name=$(terraform output -raw aks_cluster_name)" >> $GITHUB_OUTPUT
+          echo "aks_rg=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
 
 
   # =======================================================
@@ -186,45 +212,65 @@ jobs:
   docker-build-push:
     name: 🐳 Build & Push to ACR
     runs-on: ubuntu-latest
-    needs: terraform-deploy
+    needs: [build-test, terraform-deploy]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     outputs:
       image-uri: ${{ steps.push.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
         with:
           name: build-artifacts
           path: dist/
 
-      - uses: azure/login@v2
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Get Terraform Outputs
-        id: tfout
-        working-directory: terraform
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Login to Azure Container Registry
         run: |
-          echo "acr_name=$(terraform output -raw acr_name)" >> $GITHUB_OUTPUT
-          echo "acr_login=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+          az acr login --name "${{ needs.terraform-deploy.outputs.acr_name }}"
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: 🔐 ACR Login
-        run: az acr login --name ${{ steps.tfout.outputs.acr_name }}
-
-      - name: 🚀 Build & Push Image
+      - name: 🚀 Build & Push Docker Image
         id: push
         env:
-          ACR_LOGIN: ${{ steps.tfout.outputs.acr_login }}
+          ACR_LOGIN: ${{ needs.terraform-deploy.outputs.acr_login_server }}
           IMAGE_TAG: ${{ needs.build-test.outputs.image-tag }}
         run: |
           IMAGE=${ACR_LOGIN}/portfolio-website:${IMAGE_TAG}
-          docker build -t $IMAGE -t ${ACR_LOGIN}/portfolio-website:latest .
+          
+          docker build \
+            --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+            --build-arg VCS_REF=${{ github.sha }} \
+            -t $IMAGE \
+            -t ${ACR_LOGIN}/portfolio-website:latest \
+            .
+          
           docker push $IMAGE
           docker push ${ACR_LOGIN}/portfolio-website:latest
+          
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
+      - name: Scan Image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.push.outputs.image }}
+          format: sarif
+          output: trivy-image-results.sarif
+        continue-on-error: true
+
+      - name: Upload Trivy Image Scan Results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-results.sarif
+        continue-on-error: true
 
 
   # =======================================================
@@ -233,35 +279,61 @@ jobs:
   deploy-to-aks:
     name: 🚀 Deploy to AKS
     runs-on: ubuntu-latest
-    needs: docker-build-push
+    needs: [terraform-deploy, docker-build-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://${{ steps.ingress.outputs.url }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
+      - name: Azure Login
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Get AKS Credentials
         run: |
           az aks get-credentials \
-            --resource-group ${{ env.AKS_RG }} \
-            --name ${{ env.AKS_CLUSTER_NAME }} \
+            --resource-group ${{ needs.terraform-deploy.outputs.aks_rg }} \
+            --name ${{ needs.terraform-deploy.outputs.aks_name }} \
             --overwrite-existing
 
-      - name: Update image in manifest
+      - name: Create Namespace if Not Exists
+        run: kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update Deployment Image
         env:
           IMAGE_URI: ${{ needs.docker-build-push.outputs.image-uri }}
         run: |
           sed -i "s|image:.*|image: ${IMAGE_URI}|g" k8s/deployment.yaml
 
-      - run: kubectl apply -f k8s/ -n production
-      - run: kubectl rollout status deployment/portfolio-website -n production --timeout=10m
+      - name: Apply Kubernetes Manifests
+        run: kubectl apply -f k8s/ -n production
 
+      - name: Wait for Rollout
+        run: |
+          kubectl rollout status deployment/portfolio-website -n production --timeout=10m
+
+      - name: Get Deployment Status
+        id: ingress
+        run: |
+          kubectl get pods -n production
+          kubectl get svc -n production
+          INGRESS_IP=$(kubectl get svc portfolio-website-service -n production -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
+          echo "url=${INGRESS_IP}" >> $GITHUB_OUTPUT
+          echo "### 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "**Service IP:** ${INGRESS_IP}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify Deployment Health
+        run: |
+          kubectl get deployment portfolio-website -n production
+          kubectl describe deployment portfolio-website -n production
 
 
   # =======================================================
-  # Job 6: Notifications
+  # Job 6: Notifications & Summary
   # =======================================================
   notify:
     name: 📊 Pipeline Summary
@@ -269,9 +341,30 @@ jobs:
     needs:
       - code-quality
       - build-test
+      - terraform-deploy
       - docker-build-push
       - deploy-to-aks
     if: always()
 
     steps:
-      - run: echo "Pipeline completed successfully 🚀" >> $GITHUB_STEP_SUMMARY
+      - name: Generate Summary
+        run: |
+          echo "# 🚀 Pipeline Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Test | ${{ needs.build-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform | ${{ needs.terraform-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build-push.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AKS Deploy | ${{ needs.deploy-to-aks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit SHA:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on Failure
+        if: contains(needs.*.result, 'failure')
+        run: |
+          echo "::error::Pipeline failed! Check the logs for details."
+          exit 1
