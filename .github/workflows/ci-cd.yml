@@ -108,11 +108,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # FIXED AZURE LOGIN
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # Export ARM cred
       - name: Export Terraform ARM Credentials
         run: |
           echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
@@ -120,6 +122,7 @@ jobs:
           echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
 
+      # Backend creation + RBAC Fix
       - name: Create Terraform Backend Storage
         run: |
           BACKEND_NAME="stbackend${{ github.run_id }}"
@@ -134,18 +137,26 @@ jobs:
             --sku Standard_LRS \
             --encryption-services blob
 
-          sleep 15
+          sleep 10
 
           az storage container create \
             --name tfstate \
             --auth-mode login \
             --account-name $BACKEND_NAME
 
+          # Role 1: Blob Data Owner
           az role assignment create \
             --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
             --role "Storage Blob Data Owner" \
             --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
 
+          # Role 2: Storage Account Contributor
+          az role assignment create \
+            --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
+            --role "Storage Account Contributor" \
+            --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
+
+          echo "Waiting 90 seconds for RBAC propagation..."
           sleep 90
 
       - uses: hashicorp/setup-terraform@v3
@@ -214,12 +225,6 @@ jobs:
             echo "❌ ERROR: ACR NAME IS EMPTY — set TF_VAR_PROJECT_NAME"
             exit 1
           fi
-
-      - name: Debug Output Values
-        run: |
-          echo "ACR NAME  = ${{ needs.terraform-deploy.outputs.acr_name }}"
-          echo "ACR LOGIN = ${{ needs.terraform-deploy.outputs.acr_login_server }}"
-          echo "TAG       = ${{ needs.build-test.outputs.image-tag }}"
 
       - name: Login to ACR
         run: |
@@ -298,6 +303,3 @@ jobs:
           echo "| Terraform | ${{ needs.terraform-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docker Build | ${{ needs.docker-build-push.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| AKS Deploy | ${{ needs.deploy-to-aks.result }} |" >> $GITHUB_STEP_SUMMARY
-
-
-          
