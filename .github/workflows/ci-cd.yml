@@ -1,4 +1,4 @@
-name: Build, Test & Deploy to AWS EKS
+name: Build, Test & Deploy to Azure AKS
 
 on:
   push:
@@ -15,14 +15,15 @@ permissions:
 env:
   NODE_VERSION: '22.x'
   TERRAFORM_VERSION: '1.9.0'
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: portfolio-website
-  EKS_CLUSTER_NAME: portfolio-website-cluster
+  ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+  ACR_LOGIN: ${{ secrets.AZURE_ACR_LOGIN_SERVER }}
+  AKS_CLUSTER_NAME: ${{ secrets.AZURE_AKS_CLUSTER_NAME }}
+  AKS_RG: ${{ secrets.AZURE_AKS_RG }}
 
 jobs:
 
   # =======================================================
-  # Job 1: Code Quality & Security (Without CodeQL)
+  # Job 1: Code Quality
   # =======================================================
   code-quality:
     name: 🔍 Code Quality & Security Scan
@@ -45,13 +46,13 @@ jobs:
         run: npm run lint
         continue-on-error: true
 
-      - name: 🔐 Trivy Filesystem Scan
+      - name: 🔐 Trivy Scan
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-fs-results.sarif'
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs-results.sarif
 
       - name: 📤 Upload Trivy Results
         uses: github/codeql-action/upload-sarif@v3
@@ -63,11 +64,11 @@ jobs:
   # Job 2: Build & Test
   # =======================================================
   build-test:
-    name: 🏗️ Build & Test Application
+    name: 🏗️ Build & Test
     runs-on: ubuntu-latest
     needs: code-quality
     outputs:
-      image-tag: ${{ steps.image-tag.outputs.tag }}
+      image-tag: ${{ steps.tag.outputs.tag }}
     
     steps:
       - uses: actions/checkout@v4
@@ -79,121 +80,113 @@ jobs:
 
       - run: npm ci
 
-      - name: 🧪 Run All Tests
+      - name: 🧪 Run Tests
         run: |
           npm run test:unit || true
           npm run test:integration || true
           npm test -- --coverage || true
 
-      - name: 📊 Upload Coverage to Codecov
+      - name: 📊 Upload Coverage
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
         continue-on-error: true
 
-      - name: 🏗️ Build Application
+      - name: 🏗️ Build App
         run: npm run build
 
       - uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
-          path: dist/            # ✅ FIXED
-          retention-days: 7
+          path: dist/
 
-      - name: 🏷️ Generate Image Tag
-        id: image-tag
-        run: |
-          echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+      - name: 🏷️ Create Image Tag
+        id: tag
+        run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
 
   # =======================================================
-  # Job 3: Docker Build & Push
+  # Job 3: Docker Build & Push to ACR
   # =======================================================
   docker-build-push:
-    name: 🐳 Docker Build & Push to ECR
+    name: 🐳 Build & Push to ACR
     runs-on: ubuntu-latest
     needs: build-test
     outputs:
-      image-uri: ${{ steps.build-image.outputs.image }}
-    
+      image-uri: ${{ steps.push.outputs.image }}
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: dist/          # ✅ FIXED
+          path: dist/
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # Azure Login
+      - name: 🔐 Azure Login
+        uses: azure/login@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: aws-actions/amazon-ecr-login@v2
-        id: login-ecr
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: 🔐 ACR Login
+        run: az acr login --name ${{ env.ACR_NAME }}
+
       - name: 🐳 Build & Push Image
-        id: build-image
+        id: push
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ needs.build-test.outputs.image-tag }}
         run: |
-          IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          IMAGE=${{ env.ACR_LOGIN }}/portfolio-website:${IMAGE_TAG}
 
-          docker build . -t $IMAGE -t ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+          docker build -t $IMAGE -t ${{ env.ACR_LOGIN }}/portfolio-website:latest .
           docker push $IMAGE
-          docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+          docker push ${{ env.ACR_LOGIN }}/portfolio-website:latest
 
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: 🔒 Scan Docker Image
+      - name: 🔒 Trivy Image Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ steps.build-image.outputs.image }}
+          image-ref: ${{ steps.push.outputs.image }}
           format: sarif
           output: trivy-image-results.sarif
         continue-on-error: true
 
-      - name: 📤 Upload Image Scan Results
+      - name: Upload Image Scan
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image-results.sarif
 
 
   # =======================================================
-  # Job 4: Terraform Infrastructure
+  # Job 4: Terraform Apply Azure Infra
   # =======================================================
   terraform-deploy:
-    name: 🏗️ Terraform Infrastructure
+    name: 🏗️ Terraform Azure Infra
     runs-on: ubuntu-latest
     needs: docker-build-push
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: 🔐 Azure Login
+        uses: azure/login@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: ⬇️ Install Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: 🔄 Terraform Init
         working-directory: terraform
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=portfolio-website/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="encrypt=true"
+        run: terraform init
 
       - name: Validate & Format
         working-directory: terraform
@@ -205,10 +198,9 @@ jobs:
         working-directory: terraform
         run: |
           terraform plan -out=tfplan \
-            -var="aws_region=${{ env.AWS_REGION }}" \
             -var="project_name=${{ secrets.TF_VAR_PROJECT_NAME }}" \
             -var="environment=${{ secrets.TF_VAR_ENVIRONMENT }}" \
-            -var="ecr_repository_url=${{ needs.docker-build-push.outputs.image-uri }}"
+            -var="image_uri=${{ needs.docker-build-push.outputs.image-uri }}"
 
       - name: 🚀 Terraform Apply
         working-directory: terraform
@@ -216,32 +208,30 @@ jobs:
 
 
   # =======================================================
-  # Job 5: Deploy to EKS
+  # Job 5: Deploy to AKS
   # =======================================================
-  deploy-to-eks:
-    name: 🚀 Deploy to EKS
+  deploy-to-aks:
+    name: 🚀 Deploy to AKS
     runs-on: ubuntu-latest
     needs: [docker-build-push, terraform-deploy]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
+    if: github.ref == 'refs/heads/main'
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: 🔐 Azure Login
+        uses: azure/login@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - uses: azure/setup-kubectl@v3
-
-      - name: Configure EKS
+      - name: Get AKS Credentials
         run: |
-          aws eks update-kubeconfig \
-            --name ${{ env.EKS_CLUSTER_NAME }} \
-            --region ${{ env.AWS_REGION }}
+          az aks get-credentials \
+            --resource-group ${{ env.AKS_RG }} \
+            --name ${{ env.AKS_CLUSTER_NAME }} \
+            --overwrite-existing
 
-      - name: Update deployment image
+      - name: Update image in deployment
         env:
           IMAGE_URI: ${{ needs.docker-build-push.outputs.image-uri }}
         run: |
@@ -257,15 +247,14 @@ jobs:
 
 
   # =======================================================
-  # Job 6: Notification
+  # Job 6: Notifications
   # =======================================================
   notify:
     name: 📊 Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [code-quality, build-test, docker-build-push, deploy-to-eks]
+    needs: [code-quality, build-test, docker-build-push, deploy-to-aks]
     if: always()
 
     steps:
       - name: Summary
-        run: |
-          echo "## Pipeline Complete 🚀" >> $GITHUB_STEP_SUMMARY
+        run: echo "Pipeline completed successfully 🚀" >> $GITHUB_STEP_SUMMARY
