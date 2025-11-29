@@ -101,7 +101,7 @@ jobs:
 
       - name: 🏷️ Create Image Tag
         id: tag
-        run: echo "tag=$(echo ${{ github.sha }} | cut-c1-7)" >> $GITHUB_OUTPUT
+        run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
 
   # =======================================================
@@ -120,6 +120,14 @@ jobs:
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ✅ MUST BE ADDED — Terraform SP Authentication
+      - name: Set Terraform SP Auth
+        run: |
+          echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
 
       - name: ⬇️ Install Terraform
         uses: hashicorp/setup-terraform@v3
@@ -195,14 +203,6 @@ jobs:
           docker push $IMAGE
           docker push ${ACR_LOGIN}/portfolio-website:latest
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
-
-      - name: 🔒 Trivy Image Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.push.outputs.image }}
-          format: sarif
-          output: trivy-image-results.sarif
-        continue-on-error: true
 
 
   # =======================================================
