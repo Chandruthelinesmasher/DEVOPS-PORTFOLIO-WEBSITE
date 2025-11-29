@@ -129,21 +129,27 @@ jobs:
           echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
 
-      # Create backend BEFORE terraform init
+      # 🔥 Create UNIQUE backend BEFORE terraform init
       - name: 🏗️ Create Terraform Backend (Storage Account + Container)
         run: |
+          BACKEND_NAME=tfbackend${{ github.run_id }}
+
+          echo "BACKEND_NAME=$BACKEND_NAME" >> $GITHUB_ENV
+
           az group create -n tf-backend-rg -l eastus || true
 
           az storage account create \
-            -n tfbackendstorage123 \
+            -n $BACKEND_NAME \
             -g tf-backend-rg \
             -l eastus \
             --sku Standard_LRS \
-            --encryption-services blob || true
+            --encryption-services blob
 
           az storage container create \
             --name tfstate \
-            --account-name tfbackendstorage123 || true
+            --account-name $BACKEND_NAME
+
+          echo "ARM_STORAGE_ACCOUNT_NAME=$BACKEND_NAME" >> $GITHUB_ENV
 
       - name: ⬇️ Install Terraform
         uses: hashicorp/setup-terraform@v3
@@ -173,7 +179,7 @@ jobs:
 
 
   # =======================================================
-  # Job 4: Docker Build & Push to ACR (AFTER Terraform)
+  # Job 4: Docker Build & Push to ACR
   # =======================================================
   docker-build-push:
     name: 🐳 Build & Push to ACR
@@ -195,7 +201,6 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Get ACR details from Terraform
       - name: Get Terraform Outputs
         id: tfout
         working-directory: terraform
@@ -261,7 +266,7 @@ jobs:
 
 
   # =======================================================
-  # Job 6: Notifications
+  # Job 6: Notification
   # =======================================================
   notify:
     name: 📊 Pipeline Summary
