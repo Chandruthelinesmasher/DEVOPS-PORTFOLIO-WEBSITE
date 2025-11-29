@@ -15,8 +15,6 @@ permissions:
 env:
   NODE_VERSION: '22.x'
   TERRAFORM_VERSION: '1.9.0'
-  ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
-  ACR_LOGIN: ${{ secrets.AZURE_ACR_LOGIN_SERVER }}
   AKS_CLUSTER_NAME: ${{ secrets.AZURE_AKS_CLUSTER_NAME }}
   AKS_RG: ${{ secrets.AZURE_AKS_RG }}
 
@@ -103,73 +101,17 @@ jobs:
 
       - name: 🏷️ Create Image Tag
         id: tag
-        run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+        run: echo "tag=$(echo ${{ github.sha }} | cut-c1-7)" >> $GITHUB_OUTPUT
 
 
   # =======================================================
-  # Job 3: Docker Build & Push to ACR
-  # =======================================================
-  docker-build-push:
-    name: 🐳 Build & Push to ACR
-    runs-on: ubuntu-latest
-    needs: build-test
-    outputs:
-      image-uri: ${{ steps.push.outputs.image }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          path: dist/
-
-      # Azure Login
-      - name: 🔐 Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: 🔐 ACR Login
-        run: az acr login --name ${{ env.ACR_NAME }}
-
-      - name: 🐳 Build & Push Image
-        id: push
-        env:
-          IMAGE_TAG: ${{ needs.build-test.outputs.image-tag }}
-        run: |
-          IMAGE=${{ env.ACR_LOGIN }}/portfolio-website:${IMAGE_TAG}
-
-          docker build -t $IMAGE -t ${{ env.ACR_LOGIN }}/portfolio-website:latest .
-          docker push $IMAGE
-          docker push ${{ env.ACR_LOGIN }}/portfolio-website:latest
-
-          echo "image=$IMAGE" >> $GITHUB_OUTPUT
-
-      - name: 🔒 Trivy Image Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.push.outputs.image }}
-          format: sarif
-          output: trivy-image-results.sarif
-        continue-on-error: true
-
-      - name: Upload Image Scan
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-image-results.sarif
-
-
-  # =======================================================
-  # Job 4: Terraform Apply Azure Infra
+  # Job 3: Terraform Apply Azure Infra
   # =======================================================
   terraform-deploy:
     name: 🏗️ Terraform Azure Infra
     runs-on: ubuntu-latest
-    needs: docker-build-push
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build-test
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
@@ -199,12 +141,68 @@ jobs:
         run: |
           terraform plan -out=tfplan \
             -var="project_name=${{ secrets.TF_VAR_PROJECT_NAME }}" \
-            -var="environment=${{ secrets.TF_VAR_ENVIRONMENT }}" \
-            -var="image_uri=${{ needs.docker-build-push.outputs.image-uri }}"
+            -var="environment=${{ secrets.TF_VAR_ENVIRONMENT }}"
 
       - name: 🚀 Terraform Apply
         working-directory: terraform
         run: terraform apply -auto-approve tfplan
+
+
+  # =======================================================
+  # Job 4: Docker Build & Push to ACR (AFTER Terraform)
+  # =======================================================
+  docker-build-push:
+    name: 🐳 Build & Push to ACR
+    runs-on: ubuntu-latest
+    needs: terraform-deploy
+    outputs:
+      image-uri: ${{ steps.push.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+      - name: 🔐 Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Fetch ACR name from Terraform output
+      - name: Get Terraform Outputs
+        id: tfout
+        working-directory: terraform
+        run: |
+          echo "acr_name=$(terraform output -raw acr_name)" >> $GITHUB_OUTPUT
+          echo "acr_login=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 ACR Login
+        run: az acr login --name ${{ steps.tfout.outputs.acr_name }}
+
+      - name: 🐳 Build & Push Image
+        id: push
+        env:
+          ACR_LOGIN: ${{ steps.tfout.outputs.acr_login }}
+          IMAGE_TAG: ${{ needs.build-test.outputs.image-tag }}
+        run: |
+          IMAGE=${ACR_LOGIN}/portfolio-website:${IMAGE_TAG}
+          docker build -t $IMAGE -t ${ACR_LOGIN}/portfolio-website:latest .
+          docker push $IMAGE
+          docker push ${ACR_LOGIN}/portfolio-website:latest
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: 🔒 Trivy Image Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.push.outputs.image }}
+          format: sarif
+          output: trivy-image-results.sarif
+        continue-on-error: true
 
 
   # =======================================================
@@ -213,7 +211,7 @@ jobs:
   deploy-to-aks:
     name: 🚀 Deploy to AKS
     runs-on: ubuntu-latest
-    needs: [docker-build-push, terraform-deploy]
+    needs: [docker-build-push]
     if: github.ref == 'refs/heads/main'
 
     steps:
