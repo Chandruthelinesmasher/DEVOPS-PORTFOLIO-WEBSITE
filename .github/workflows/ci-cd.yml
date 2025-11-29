@@ -146,7 +146,6 @@ jobs:
 
           sleep 10
 
-          # MUST use AAD login mode
           az storage container create \
             --name tfstate \
             --auth-mode login \
@@ -156,6 +155,9 @@ jobs:
             --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
             --role "Storage Blob Data Owner" \
             --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
+
+          echo "Waiting for RBAC propagation..."
+          sleep 60
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
