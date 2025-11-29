@@ -34,7 +34,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-
       - run: npm run lint || true
 
       - uses: aquasecurity/trivy-action@master
@@ -208,9 +207,12 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Debug ACR Name
+        run: echo "ACR NAME = ${{ needs.terraform-deploy.outputs.acr_name }}"
+
       - name: Login to ACR
         run: |
-          az acr login --name ${{ needs.terraform-deploy.outputs.acr_name }}
+          az acr login --name "${{ needs.terraform-deploy.outputs.acr_name }}"
 
       - name: Build & Push Docker Image
         id: push
@@ -280,7 +282,6 @@ jobs:
       - run: |
           echo "# 🚀 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build & Test | ${{ needs.build-test.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Terraform | ${{ needs.terraform-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
