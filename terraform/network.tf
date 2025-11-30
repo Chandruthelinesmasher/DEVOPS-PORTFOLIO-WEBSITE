@@ -1,5 +1,5 @@
 resource "azurerm_virtual_network" "vnet" {
-  name                = "${var.project_name}-vnet"
+  name                = "${local.project_clean}-vnet"
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
   address_space       = ["10.0.0.0/16"]
@@ -22,7 +22,7 @@ resource "azurerm_subnet" "private" {
 }
 
 resource "azurerm_nat_gateway" "ng" {
-  name                = "${var.project_name}-nat"
+  name                = "${local.project_clean}-nat"
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
   sku_name            = "Standard"
