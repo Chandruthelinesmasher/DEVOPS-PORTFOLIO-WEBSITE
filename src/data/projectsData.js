@@ -1,11 +1,11 @@
 export const projectsData = [
   {
     id: 1,
-    title: 'Multi-Cloud CI/CD Pipeline',
-    description: 'Implemented end-to-end CI/CD pipeline for microservices deployment across AWS and Azure',
-    tech: ['Jenkins', 'Docker', 'Kubernetes', 'Terraform', 'AWS', 'Azure'],
-    metrics: ['70% faster deployments', '99.9% uptime', '40% cost reduction'],
-    github: '#'
+    title: 'DevOps Portfolio Website',
+    description: 'Modern, responsive portfolio website built with React + Vite showcasing DevOps expertise, certifications, and technical projects with stunning animations and interactive UI',
+    tech: ['React', 'Vite', 'Tailwind CSS', 'Framer Motion', 'shadcn/ui'],
+    metrics: ['100% responsive design', 'Modern UI/UX', 'Deployed on GitHub Pages'],
+    github: 'https://github.com/Chandruthelinesmasher/DEVOPS-PORTFOLIO-WEBSITE'
   },
   {
     id: 2,
