@@ -5,8 +5,6 @@ metadata:
   namespace: production
   labels:
     app: portfolio-website
-    version: v1
-    environment: production
 spec:
   replicas: 3
   strategy:
@@ -21,69 +19,94 @@ spec:
     metadata:
       labels:
         app: portfolio-website
-        version: v1
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
-        prometheus.io/path: "/metrics"
     spec:
       containers:
-      - name: portfolio
-        image: <AWS_ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/portfolio-website:latest
+      - name: portfolio-website
+        image: your-acr.azurecr.io/portfolio-website:latest
         imagePullPolicy: Always
         ports:
         - name: http
-          containerPort: 8080
+          containerPort: 80  # Match your Dockerfile EXPOSE port
           protocol: TCP
-        env:
-        - name: NODE_ENV
-          value: "production"
-        - name: PORT
-          value: "8080"
+        
+        # Resource limits
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "250m"
+            memory: "128Mi"
+            cpu: "100m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "256Mi"
+            cpu: "200m"
+        
+        # Liveness probe - checks if container is alive
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 80
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
-          successThreshold: 1
           failureThreshold: 3
+        
+        # Readiness probe - checks if container is ready to serve traffic
         readinessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 80
           initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 3
-          successThreshold: 1
           failureThreshold: 3
+        
+        # Startup probe - gives container time to start
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30  # 30 * 5 = 150 seconds max startup time
+        
+        # Environment variables (if needed)
+        env:
+        - name: NODE_ENV
+          value: "production"
+        
+        # Security context
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1001
+          runAsUser: 101  # nginx user
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: false
           capabilities:
             drop:
             - ALL
+      
+      # Security context for pod
       securityContext:
-        fsGroup: 1001
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - portfolio-website
-              topologyKey: kubernetes.io/hostname
+        runAsNonRoot: true
+        fsGroup: 101
+      
+      # Image pull secrets (if using private ACR)
+      # Uncomment if needed:
+      # imagePullSecrets:
+      # - name: acr-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portfolio-website
+  namespace: production
+  labels:
+    app: portfolio-website
+spec:
+  type: LoadBalancer
+  selector:
+    app: portfolio-website
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 80
+  sessionAffinity: ClientIP

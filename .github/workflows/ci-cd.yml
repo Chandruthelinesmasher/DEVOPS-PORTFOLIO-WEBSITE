@@ -92,7 +92,7 @@ jobs:
     name: 🏗️ Terraform Azure Infrastructure
     runs-on: ubuntu-latest
     needs: build-test
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (success() || needs.build-test.result == 'success')
     outputs:
       acr_name: ${{ steps.tf_outputs.outputs.acr_name }}
       acr_login_server: ${{ steps.tf_outputs.outputs.acr_login_server }}
@@ -252,11 +252,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          path: dist/
-        continue-on-error: true
+      # Skip downloading artifacts - Docker will build from source
+      # The build happens inside Docker, not in the GitHub Actions runner
       
       - uses: azure/login@v2
         with:
@@ -334,6 +331,14 @@ jobs:
             --name "${{ needs.terraform-deploy.outputs.aks_name }}" \
             --overwrite-existing
       
+      - name: Configure ACR Integration with AKS
+        run: |
+          # Attach ACR to AKS for seamless image pulling
+          az aks update \
+            --resource-group "${{ needs.terraform-deploy.outputs.aks_rg }}" \
+            --name "${{ needs.terraform-deploy.outputs.aks_name }}" \
+            --attach-acr "${{ needs.terraform-deploy.outputs.acr_name }}"
+      
       - name: Create Namespace
         run: kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
       
@@ -345,7 +350,32 @@ jobs:
         run: kubectl apply -f k8s/ -n production
       
       - name: Wait for Rollout
+        id: rollout
         run: kubectl rollout status deployment/portfolio-website -n production --timeout=10m
+        continue-on-error: true
+      
+      - name: Debug Deployment Issues
+        if: steps.rollout.outcome == 'failure'
+        run: |
+          echo "=== Deployment Status ==="
+          kubectl get deployment portfolio-website -n production -o wide
+          
+          echo -e "\n=== Pod Status ==="
+          kubectl get pods -n production -l app=portfolio-website -o wide
+          
+          echo -e "\n=== Pod Events ==="
+          kubectl get events -n production --sort-by='.lastTimestamp' | grep portfolio-website
+          
+          echo -e "\n=== Pod Describe ==="
+          kubectl describe pods -n production -l app=portfolio-website
+          
+          echo -e "\n=== Pod Logs ==="
+          kubectl logs -n production -l app=portfolio-website --tail=100 --all-containers=true || echo "No logs available"
+          
+          echo -e "\n=== Replica Set Status ==="
+          kubectl get rs -n production -l app=portfolio-website
+          
+          exit 1
 
 
   # =======================================================
