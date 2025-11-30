@@ -27,22 +27,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-
       - run: npm ci
       - run: npm run lint || true
-
       - uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
           format: sarif
           output: trivy-fs-results.sarif
-
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-fs-results.sarif
@@ -57,41 +53,35 @@ jobs:
     needs: code-quality
     outputs:
       image-tag: ${{ steps.tag.outputs.tag }}
+
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-
       - run: npm ci
-
       - run: |
           npm run test:unit || true
           npm run test:integration || true
           npm test -- --coverage || true
-
       - uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
         continue-on-error: true
-
       - run: npm run build
-
       - uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: dist/
           retention-days: 7
-
       - id: tag
         run: echo "tag=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
 
   # =======================================================
-  # Job 3: Terraform Deploy
+  # Job 3: Terraform Deploy (FIXED)
   # =======================================================
   terraform-deploy:
     name: 🏗️ Terraform Azure Infrastructure
@@ -111,19 +101,19 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Export Terraform ARM Credentials
+      - name: Export ARM credentials
         run: |
           echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
           echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
 
-      - name: Create Terraform Backend Storage
+      - name: Create Backend Storage (with proper RBAC)
         run: |
           BACKEND_NAME="stbackend${{ github.run_id }}"
           BACKEND_NAME=$(echo "$BACKEND_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g' | cut -c1-24)
           echo "BACKEND_NAME=$BACKEND_NAME" >> $GITHUB_ENV
-
+          
           az group create -n ${{ env.BACKEND_RG }} -l eastus || true
 
           az storage account create \
@@ -135,31 +125,52 @@ jobs:
 
           sleep 10
 
+          # create container using AAD auth
           az storage container create \
             --name tfstate \
             --auth-mode login \
-            --account-name $BACKEND_NAME
+            --account-name $BACKEND_NAME || true
 
+          echo "Assigning RBAC roles..."
+
+          # REQUIRED FOR TERRAFORM BACKEND
           az role assignment create \
             --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
             --role "Storage Blob Data Owner" \
             --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/${{ env.BACKEND_RG }}/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME" || true
 
-          sleep 20
+          az role assignment create \
+            --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
+            --role "Storage Account Contributor" \
+            --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/${{ env.BACKEND_RG }}/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME" || true
+
+          echo "WAITING 60 SECONDS FOR RBAC PROPAGATION..."
+          sleep 60
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
-      - name: Terraform Init
+      #
+      # ------------ FIXED TERRAFORM INIT (RETRY LOGIC) ----------
+      #
+      - name: Terraform Init (with retry)
         working-directory: terraform
         run: |
-          terraform init \
-            -backend-config="resource_group_name=${{ env.BACKEND_RG }}" \
-            -backend-config="storage_account_name=${BACKEND_NAME}" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=infra.tfstate" \
-            -backend-config="use_azuread_auth=true"
+          n=0
+          until [ $n -ge 5 ]
+          do
+            echo "Attempt $((n+1)) to run terraform init..."
+            terraform init \
+              -backend-config="resource_group_name=${{ env.BACKEND_RG }}" \
+              -backend-config="storage_account_name=${BACKEND_NAME}" \
+              -backend-config="container_name=tfstate" \
+              -backend-config="key=infra.tfstate" \
+              -backend-config="use_azuread_auth=true" && break
+            n=$((n+1))
+            echo "Terraform init failed. Waiting 15 seconds..."
+            sleep 15
+          done
 
       - working-directory: terraform
         run: terraform validate
@@ -191,29 +202,22 @@ jobs:
     needs: terraform-deploy
     outputs:
       image-uri: ${{ steps.push.outputs.image }}
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           name: build-artifacts
           path: dist/
-
       - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-
       - run: |
           if [ -z "${{ needs.terraform-deploy.outputs.acr_name }}" ]; then
             echo "ACR name missing!"
             exit 1
           fi
-
       - run: az acr login --name "${{ needs.terraform-deploy.outputs.acr_name }}"
-
       - uses: docker/setup-buildx-action@v3
-
       - id: push
         env:
           ACR_LOGIN: ${{ needs.terraform-deploy.outputs.acr_login_server }}
@@ -235,24 +239,18 @@ jobs:
     needs: [terraform-deploy, docker-build-push]
     steps:
       - uses: actions/checkout@v4
-
       - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-
       - run: |
           az aks get-credentials \
             --resource-group "${{ needs.terraform-deploy.outputs.aks_rg }}" \
             --name "${{ needs.terraform-deploy.outputs.aks_name }}" \
             --overwrite-existing
-
       - run: kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
-
       - run: |
           sed -i "s|image:.*|image: ${{ needs.docker-build-push.outputs.image-uri }}|g" k8s/deployment.yaml
-
       - run: kubectl apply -f k8s/ -n production
-
       - run: kubectl rollout status deployment/portfolio-website -n production --timeout=10m
 
 
