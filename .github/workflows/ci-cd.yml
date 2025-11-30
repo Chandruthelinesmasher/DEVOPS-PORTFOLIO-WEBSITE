@@ -1,4 +1,4 @@
-name: Build, Test & Deploy to Azure AKS
+name: Build, Test & Deploy to Azure AKS (Full Destroy Mode)
 
 on:
   push:
@@ -9,12 +9,13 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   actions: read
+  security-events: write
 
 env:
   NODE_VERSION: '22.x'
   TERRAFORM_VERSION: '1.9.0'
+  BACKEND_RG: tf-backend-rg
 
 jobs:
 
@@ -22,6 +23,7 @@ jobs:
   # Job 1: Code Quality
   # =======================================================
   code-quality:
+    name: 🔍 Code Quality & Security Scan
     runs-on: ubuntu-latest
 
     steps:
@@ -51,6 +53,7 @@ jobs:
   # Job 2: Build & Test
   # =======================================================
   build-test:
+    name: 🏗️ Build & Test
     runs-on: ubuntu-latest
     needs: code-quality
     outputs:
@@ -90,11 +93,93 @@ jobs:
 
 
   # =======================================================
-  # Job 3: Terraform Infra Deployment
+  # Job 3: Pre-Destroy — FULL DESTROY MODE
   # =======================================================
-  terraform-deploy:
+  pre-destroy:
+    name: 🧨 Pre-Destroy Azure Resource Groups
     runs-on: ubuntu-latest
     needs: build-test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Validate Inputs
+        run: |
+          if [ -z "${{ secrets.TF_VAR_PROJECT_NAME }}" ]; then
+            echo "Missing TF_VAR_PROJECT_NAME"
+            exit 1
+          fi
+          if [ -z "${{ secrets.TF_VAR_ENVIRONMENT }}" ]; then
+            echo "Missing TF_VAR_ENVIRONMENT"
+            exit 1
+          fi
+
+      - name: Build Resource Group List
+        id: rg_list
+        run: |
+          PROJECT="${{ secrets.TF_VAR_PROJECT_NAME }}"
+          ENV="${{ secrets.TF_VAR_ENVIRONMENT }}"
+          BACKEND_RG="${{ env.BACKEND_RG }}"
+          RG1="${PROJECT}-${ENV}-rg"
+          RG2="${PROJECT}-rg"
+          CUSTOM="${{ secrets.CUSTOM_RG_LIST }}"
+
+          LIST="${BACKEND_RG},${RG1},${RG2}"
+          if [ -n "$CUSTOM" ]; then LIST="${LIST},${CUSTOM}"; fi
+
+          UNIQUE=$(echo "$LIST" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | sort -u | paste -sd, -)
+          echo "rg_list=$UNIQUE" >> $GITHUB_OUTPUT
+
+      - name: Delete Resource Groups
+        run: |
+          IFS=',' read -ra RGS <<< "${{ steps.rg_list.outputs.rg_list }}"
+          for RG in "${RGS[@]}"; do
+            if [ -z "$RG" ]; then continue; fi
+
+            echo "Checking RG: $RG"
+            if az group exists -n "$RG"; then
+              echo "Deleting $RG ..."
+              az group delete -n "$RG" --yes --no-wait || true
+
+              for i in $(seq 1 60); do
+                if ! az group exists -n "$RG"; then
+                  echo "$RG deleted"
+                  break
+                fi
+                echo "Waiting for $RG ... ($i/60)"
+                sleep 10
+              done
+            else
+              echo "$RG does NOT exist — skipping"
+            fi
+          done
+
+      - run: sleep 20
+
+      - name: Recreate Backend RG
+        run: az group create -n ${{ env.BACKEND_RG }} -l eastus
+
+
+      - name: Export ARM Credentials
+        run: |
+          echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}"     >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}"     >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
+
+
+  # =======================================================
+  # Job 4: Terraform Deploy
+  # =======================================================
+  terraform-deploy:
+    name: 🏗️ Terraform Deploy
+    runs-on: ubuntu-latest
+    needs: pre-destroy
     if: github.ref == 'refs/heads/main'
     outputs:
       acr_name: ${{ steps.tf_outputs.outputs.acr_name }}
@@ -105,43 +190,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Export Terraform Credentials
-        run: |
-          echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
-
-      - name: Create Terraform Backend
+      - name: Create Backend Storage
         run: |
           BACKEND_NAME="stbackend${{ github.run_id }}"
+          BACKEND_NAME=$(echo "$BACKEND_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g' | cut -c1-24)
           echo "BACKEND_NAME=$BACKEND_NAME" >> $GITHUB_ENV
-
-          az group create -n tf-backend-rg -l eastus || true
 
           az storage account create \
             --name $BACKEND_NAME \
-            --resource-group tf-backend-rg \
+            --resource-group ${{ env.BACKEND_RG }} \
             --location eastus \
             --sku Standard_LRS
 
           sleep 10
 
-          az storage container create \
-            --name tfstate \
-            --account-name $BACKEND_NAME
+          az storage container create --name tfstate --auth-mode login --account-name $BACKEND_NAME
 
           az role assignment create \
             --assignee ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }} \
             --role "Storage Blob Data Owner" \
-            --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/tf-backend-rg/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME"
+            --scope "/subscriptions/${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}/resourceGroups/${{ env.BACKEND_RG }}/providers/Microsoft.Storage/storageAccounts/$BACKEND_NAME" || true
 
-          sleep 60
+          sleep 20
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -151,7 +225,7 @@ jobs:
         working-directory: terraform
         run: |
           terraform init \
-            -backend-config="resource_group_name=tf-backend-rg" \
+            -backend-config="resource_group_name=${{ env.BACKEND_RG }}" \
             -backend-config="storage_account_name=${BACKEND_NAME}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=infra.tfstate" \
@@ -163,8 +237,8 @@ jobs:
       - working-directory: terraform
         run: |
           terraform plan -out=tfplan \
-            -var="project_name=${{ secrets.TF_VAR_PROJECT_NAME }}" \
-            -var="environment=${{ secrets.TF_VAR_ENVIRONMENT }}"
+            -var "project_name=${{ secrets.TF_VAR_PROJECT_NAME }}" \
+            -var "environment=${{ secrets.TF_VAR_ENVIRONMENT }}"
 
       - working-directory: terraform
         run: terraform apply -auto-approve tfplan
@@ -179,11 +253,12 @@ jobs:
 
 
   # =======================================================
-  # Job 4: Docker Build & Push
+  # Job 5: Docker Build & Push
   # =======================================================
   docker-build-push:
+    name: 🐳 Build & Push to ACR
     runs-on: ubuntu-latest
-    needs: [build-test, terraform-deploy]
+    needs: terraform-deploy
     outputs:
       image-uri: ${{ steps.push.outputs.image }}
 
@@ -195,61 +270,57 @@ jobs:
           name: build-artifacts
           path: dist/
 
-      - name: Azure Login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - run: |
+          if [ -z "${{ needs.terraform-deploy.outputs.acr_name }}" ]; then
+            echo "ACR empty"
+            exit 1
+          fi
+
+      - run: az acr login --name "${{ needs.terraform-deploy.outputs.acr_name }}"
+
       - uses: docker/setup-buildx-action@v3
 
-      - name: Login to ACR
-        run: |
-          az acr login --name "${{ needs.terraform-deploy.outputs.acr_name }}"
-
-      - name: Build & Push Image
-        id: push
+      - id: push
         env:
           ACR_LOGIN: ${{ needs.terraform-deploy.outputs.acr_login_server }}
           IMAGE_TAG: ${{ needs.build-test.outputs.image-tag }}
         run: |
-          IMAGE=${ACR_LOGIN}/portfolio-website:${IMAGE_TAG}
-
-          docker build -t $IMAGE -t ${ACR_LOGIN}/portfolio-website:latest .
-
-          docker push $IMAGE
-          docker push ${ACR_LOGIN}/portfolio-website:latest
-
+          IMAGE="${ACR_LOGIN}/portfolio-website:${IMAGE_TAG}"
+          docker build -t "$IMAGE" -t "${ACR_LOGIN}/portfolio-website:latest" .
+          docker push "$IMAGE"
+          docker push "${ACR_LOGIN}/portfolio-website:latest"
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
 
   # =======================================================
-  # Job 5: Deploy to AKS
+  # Job 6: Deploy to AKS
   # =======================================================
   deploy-to-aks:
+    name: 🚀 Deploy to AKS
     runs-on: ubuntu-latest
     needs: [terraform-deploy, docker-build-push]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Get AKS Credentials
-        run: |
+      - run: |
           az aks get-credentials \
-            --resource-group ${{ needs.terraform-deploy.outputs.aks_rg }} \
-            --name ${{ needs.terraform-deploy.outputs.aks_name }} \
+            --resource-group "${{ needs.terraform-deploy.outputs.aks_rg }}" \
+            --name "${{ needs.terraform-deploy.outputs.aks_name }}" \
             --overwrite-existing
 
       - run: kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
 
-      - env:
-          IMAGE_URI: ${{ needs.docker-build-push.outputs.image-uri }}
-        run: |
-          sed -i "s|image:.*|image: ${IMAGE_URI}|g" k8s/deployment.yaml
+      - run: |
+          sed -i "s|image:.*|image: ${{ needs.docker-build-push.outputs.image-uri }}|g" k8s/deployment.yaml
 
       - run: kubectl apply -f k8s/ -n production
 
@@ -257,23 +328,92 @@ jobs:
 
 
   # =======================================================
-  # Job 6: Notifications
+  # Job 7: Notify Summary
   # =======================================================
   notify:
+    name: 📊 Pipeline Summary
     runs-on: ubuntu-latest
-    needs:
-      - code-quality
-      - build-test
-      - terraform-deploy
-      - docker-build-push
-      - deploy-to-aks
+    needs: [code-quality, build-test, terraform-deploy, docker-build-push, deploy-to-aks]
     if: always()
 
     steps:
       - run: |
-          echo "# 🚀 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
-          echo "**Code Quality:** ${{ needs.code-quality.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build & Test:** ${{ needs.build-test.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Terraform:** ${{ needs.terraform-deploy.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Docker Build:** ${{ needs.docker-build-push.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**AKS Deploy:** ${{ needs.deploy-to-aks.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "# 🚀 Pipeline Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Test | ${{ needs.build-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform | ${{ needs.terraform-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build-push.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AKS Deploy | ${{ needs.deploy-to-aks.result }} |" >> $GITHUB_STEP_SUMMARY
+
+
+  # =======================================================
+  # Job 8: Manual Approval via Environment "destroy"
+  # =======================================================
+  wait-for-approval:
+    name: ⏸️ Await Approval to Destroy Resources
+    runs-on: ubuntu-latest
+    needs: notify
+    environment: destroy
+
+    steps:
+      - run: echo "Awaiting approval to perform final destroy..."
+
+
+  # =======================================================
+  # Job 9: Final Destroy (manual approval required)
+  # =======================================================
+  destroy-resources:
+    name: 💣 Final Destroy Azure Resources
+    runs-on: ubuntu-latest
+    needs: wait-for-approval
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build RG List
+        id: rg_list_final
+        run: |
+          PROJECT="${{ secrets.TF_VAR_PROJECT_NAME }}"
+          ENV="${{ secrets.TF_VAR_ENVIRONMENT }}"
+          RG1="${PROJECT}-${ENV}-rg"
+          RG2="${PROJECT}-rg"
+          BACKEND_RG="${{ env.BACKEND_RG }}"
+          CUSTOM="${{ secrets.CUSTOM_RG_LIST }}"
+
+          LIST="${BACKEND_RG},${RG1},${RG2}"
+          if [ -n "$CUSTOM" ]; then LIST="${LIST},${CUSTOM}"; fi
+          UNIQUE=$(echo "$LIST" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | sort -u | paste -sd, -)
+
+          echo "rg_list=$UNIQUE" >> $GITHUB_OUTPUT
+
+      - name: Destroy RGs
+        run: |
+          IFS=',' read -ra RGS <<< "${{ steps.rg_list_final.outputs.rg_list }}"
+          for RG in "${RGS[@]}"; do
+            if [ -z "$RG" ]; then continue; fi
+
+            if az group exists -n "$RG"; then
+              echo "Destroying: $RG"
+              az group delete -n "$RG" --yes --no-wait || true
+
+              for i in $(seq 1 60); do
+                if ! az group exists -n "$RG"; then
+                  echo "$RG deleted"
+                  break
+                fi
+                echo "Waiting for delete ($i/60)"
+                sleep 10
+              done
+            else
+              echo "$RG missing — skipping"
+            fi
+          done
+
+      - run: echo "Final Destroy Completed"
+
