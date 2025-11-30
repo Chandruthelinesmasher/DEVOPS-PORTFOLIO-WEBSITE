@@ -52,22 +52,25 @@ COPY --from=builder --chown=nginx:nginx /app/dist /usr/share/nginx/html
 # Ensure nginx can read the files
 RUN chmod -R 755 /usr/share/nginx/html
 
-# CRITICAL: Create necessary directories and set permissions for nginx
-RUN mkdir -p /var/cache/nginx /var/run /var/log/nginx && \
-    chown -R nginx:nginx /var/cache/nginx /var/run /var/log/nginx && \
-    chmod -R 755 /var/cache/nginx /var/run
+# CRITICAL: Create necessary temp directories for non-root nginx
+RUN mkdir -p /tmp/client_temp /tmp/proxy_temp_path /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp && \
+    chown -R nginx:nginx /tmp/client_temp /tmp/proxy_temp_path /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp && \
+    chmod -R 755 /tmp/client_temp /tmp/proxy_temp_path /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp && \
+    # Allow nginx to write pid file to /tmp
+    touch /tmp/nginx.pid && \
+    chown nginx:nginx /tmp/nginx.pid
 
-# Expose app port (must match nginx.conf)
-EXPOSE 80
+# Expose non-privileged port (8080 instead of 80)
+EXPOSE 8080
 
 # Metadata
 LABEL maintainer="kumaravelchadnru982@gmail.com"
 LABEL description="Portfolio Website - Chandru K - DevOps Engineer"
 LABEL org.opencontainers.image.source="https://github.com/Chandruthelinesmasher/DEVOPS-PORTFOLIO-WEBSITE"
 
-# Health check
+# Health check on port 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost/ || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Run as nginx user for security
 USER nginx
