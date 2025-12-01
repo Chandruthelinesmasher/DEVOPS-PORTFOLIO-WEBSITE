@@ -1,5 +1,9 @@
 # 🌐 DevOps Portfolio Website
 
+# Architecture
+
+<img width="1536" height="1024" alt="Devops portfolio architecture" src="https://github.com/user-attachments/assets/eeb3caf3-7c20-4371-a0b4-8faefcc1cbea" />
+
 A modern, responsive **DevOps Engineer Portfolio Website** built using **React + Vite** to showcase professional experience, certifications, projects, and technical expertise in DevOps, Cloud, and Automation.
 
 <img width="1894" height="901" alt="image" src="https://github.com/user-attachments/assets/cdcada9a-18ac-4e38-9b73-06f7434f399a" />
@@ -37,6 +41,7 @@ This portfolio serves as a **personal brand website** to highlight my profession
 - 📞 A modern contact section for collaboration opportunities
 
 ---
+
 
 ## 🧩 Tech Stack
 
