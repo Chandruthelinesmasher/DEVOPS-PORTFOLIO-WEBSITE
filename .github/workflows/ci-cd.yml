@@ -406,3 +406,10 @@ jobs:
             echo "- **Resource Group**: ${{ needs.terraform-deploy.outputs.aks_rg }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Image**: ${{ needs.docker-build-push.outputs.image-uri }}" >> $GITHUB_STEP_SUMMARY
           fi
+
+
+
+
+
+          
+          
