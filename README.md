@@ -2,7 +2,7 @@
 
 # Architecture
 
-<img width="1536" height="1024" alt="Devops portfolio architecture" src="https://github.com/user-attachments/assets/eeb3caf3-7c20-4371-a0b4-8faefcc1cbea" />
+<img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/1524a9d7-6ff7-4658-98e2-4863534d4e50" />
 
 A modern, responsive **DevOps Engineer Portfolio Website** built using **React + Vite** to showcase professional experience, certifications, projects, and technical expertise in DevOps, Cloud, and Automation.
 
