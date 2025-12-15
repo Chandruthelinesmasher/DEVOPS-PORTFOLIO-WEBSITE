@@ -7,14 +7,14 @@ export const projectsData = [
     metrics: ['100% responsive design', 'Modern UI/UX', 'Deployed on GitHub Pages'],
     github: 'https://github.com/Chandruthelinesmasher/DEVOPS-PORTFOLIO-WEBSITE'
   },
-  {
-    id: 2,
-    title: 'Kubernetes Auto-Scaling Infrastructure',
-    description: 'Built automated scaling solution handling 10K+ concurrent users with zero downtime',
-    tech: ['Kubernetes', 'Helm', 'Prometheus', 'HPA', 'AWS EKS'],
-    metrics: ['10K+ users handled', 'Zero downtime', '50% cost optimization'],
-    github: '#'
-  },
+ {
+  id: 2,
+  title: 'Production-Grade Kubernetes Deployment on AKS',
+  description: 'Designed and deployed a production-ready e-commerce application on Azure Kubernetes Service (AKS) with automated CI/CD, containerized workloads, and scalable infrastructure.',
+  tech: ['AKS', 'Kubernetes', 'Docker', 'Terraform', 'GitHub Actions', 'Helm', 'Prometheus'],
+  metrics: ['Automated CI/CD', 'Zero-downtime rolling updates', 'HPA enabled', 'Production monitoring'],
+  github: 'https://github.com/Chandruthelinesmasher/chandru-ecommerce-AKS'
+},
   {
     id: 3,
     title: 'Infrastructure Monitoring Dashboard',
