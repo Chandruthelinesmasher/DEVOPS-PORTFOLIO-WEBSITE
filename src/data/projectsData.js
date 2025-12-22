@@ -16,19 +16,49 @@ export const projectsData = [
   github: 'https://github.com/Chandruthelinesmasher/chandru-ecommerce-AKS'
 },
   {
-    id: 3,
-    title: 'Infrastructure Monitoring Dashboard',
-    description: 'Created comprehensive monitoring solution with real-time alerts and visualization',
-    tech: ['Grafana', 'Prometheus', 'ELK Stack', 'Python', 'Alertmanager'],
-    metrics: ['95% faster incident detection', '24/7 monitoring', '100+ metrics tracked'],
-    github: '#'
-  },
-  {
-    id: 4,
-    title: 'Infrastructure as Code Automation',
-    description: 'Automated infrastructure provisioning reducing manual effort by 80%',
-    tech: ['Terraform', 'Ansible', 'Python', 'AWS', 'GitOps'],
-    metrics: ['80% time saved', 'Fully automated', 'Zero config drift'],
-    github: '#'
-  }
+  id: 3,
+  title: 'Secure Cloud DevSecOps',
+  description: 'Built a secure cloud-native CI/CD pipeline with integrated security scanning, policy enforcement, and automated infrastructure provisioning following DevSecOps best practices.',
+  tech: [
+    'Docker',
+    'Terraform',
+    'GitHub Actions',
+    'Trivy',
+    'OWASP Dependency-Check',
+    'Azure',
+    'Kubernetes',
+    'SonarQube'
+  ],
+  metrics: [
+    'Shift-left security with automated scans',
+    'Secrets & vulnerabilities detected before deployment',
+    'End-to-end CI/CD with security gates',
+    'Production-ready DevSecOps workflow'
+  ],
+  github: 'https://github.com/Chandruthelinesmasher/secure-cloud-devsecops'
+},
+{
+  id: 4,
+  title: 'Production Monitoring, Alert & K8S',
+  description: 'Designed and implemented a production-grade Kubernetes monitoring, alerting, and auto-healing system on AKS using fully automated IaC and CI/CD pipelines.',
+  tech: [
+    'Kubernetes (AKS)',
+    'Terraform',
+    'GitHub Actions',
+    'Azure Container Registry (ACR)',
+    'Prometheus',
+    'Grafana',
+    'Alertmanager',
+    'Docker'
+  ],
+  metrics: [
+    '100% automated AKS infra provisioning',
+    'Real-time metrics & dashboards',
+    'Auto-healing via HPA & Kubernetes self-recovery',
+    'Zero manual deployment steps',
+    'Production-ready SRE architecture'
+  ],
+  github: 'https://github.com/Chandruthelinesmasher/Production-Monitoring-Alerting-Auto-Healing-on-Kubernetes'
+}
+
 ];
